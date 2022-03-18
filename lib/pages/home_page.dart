@@ -1,6 +1,11 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:retake_exam6/models/model.dart';
 import 'package:retake_exam6/pages/detail_page.dart';
+import 'package:retake_exam6/services/hive_service.dart';
 
 import '../services/http_service.dart';
 class HomePage extends StatefulWidget {
@@ -14,24 +19,64 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   List<BankingAppModel>_bankList  = [];
 
+  ConnectivityResult _connectionStatus = ConnectivityResult.values[0];
+  final Connectivity _connectivity = Connectivity();
+  late StreamSubscription<ConnectivityResult> _connectivitySubscription;
+
   @override
-  void initState() {
-    // TODO: implement initState
-    apiGetUserList();
-  }
+
   void apiGetUserList() async {
     HttpService.GET(HttpService.API_USER_LIST, HttpService.paramEmpty()).then((response) {
-      if(response != null) {
+      if(response != null || _connectionStatus==ConnectivityResult.wifi|| _connectionStatus == ConnectivityResult.mobile) {
         print(response);
-        parseResponse(response);
+        setState(() {
+          _bankList = HttpService.parseUserList(response!);
+          HiveDB.storeSavedCards(_bankList);
+        });
+
+      }else if (_connectionStatus == ConnectivityResult.none) {
+        setState(() {
+          _bankList = HiveDB.loadSavedCards();
+        });
       }
     });
   }
 
-  void parseResponse(String response){
-setState(() {
-  _bankList = HttpService.parseUserList(response);
-});
+  @override
+  void initState() {
+    // TODO: implement initState
+    super.initState();
+    initConnectivity().then((value) => apiGetUserList());
+    _connectivitySubscription =
+        _connectivity.onConnectivityChanged.listen(_updateConnectionStatus);
+  }
+
+  Future<void> initConnectivity() async {
+    late ConnectivityResult result;
+    try {
+      result = await _connectivity.checkConnectivity();
+    } on PlatformException catch (e) {
+      return;
+    }
+    if (!mounted) {
+      return Future.value(null);
+    }
+    return _updateConnectionStatus(result);
+  }
+
+  Future<void> _updateConnectionStatus(ConnectivityResult result) async {
+    setState(() {
+      _connectionStatus = result;
+    });
+    if ((_connectionStatus == ConnectivityResult.wifi ||
+        _connectionStatus == ConnectivityResult.mobile) &&
+        HiveDB.loadNoInternetCards().isNotEmpty) {
+      for (int i = 0; i < HiveDB.loadNoInternetCards().length; i++) {
+        await HttpService.POST(HttpService.API_CREATE_USER,
+            HttpService.paramsCreate(HiveDB.loadNoInternetCards()[i]));
+      }
+      HiveDB.storeNoInternetCards([]);
+    }
   }
 
 
